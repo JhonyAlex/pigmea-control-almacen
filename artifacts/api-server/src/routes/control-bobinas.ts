@@ -411,9 +411,6 @@ router.patch("/orders/:id", requireAdmin, async (req, res, next) => {
         .where(eq(productionOrders.id, id))
         .for("update");
       if (!current) return { kind: "MISSING" as const };
-      if (current.origen === "GESTION_PEDIDOS") {
-        return { kind: "AUTOMATIC" as const };
-      }
       if (current.estado !== "ACTIVA") {
         return { kind: "NOT_ACTIVE" as const };
       }
@@ -432,6 +429,44 @@ router.patch("/orders/:id", requireAdmin, async (req, res, next) => {
       }
       if (covered > Number(body.metrosNecesarios)) {
         return { kind: "METERS_BELOW_COVERAGE" as const };
+      }
+
+      // Automatic orders keep the NEXUS invariant of one active order per
+      // group: editing the characteristics must not land this order on a
+      // group that already has another active automatic order, or the next
+      // grouping request would find two candidates.
+      if (current.origen === "GESTION_PEDIDOS" && characteristicsChanged) {
+        const groupKey = getNexusGroupKey({
+          ancho: Number(body.ancho),
+          micras: Number(body.micras),
+          material: body.material,
+          camisa: String(body.camisa),
+        });
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${"nexus_group:" + groupKey}, 0))`,
+        );
+
+        const [duplicateActive] = await tx
+          .select()
+          .from(productionOrders)
+          .where(
+            and(
+              eq(productionOrders.estado, "ACTIVA"),
+              eq(productionOrders.origen, "GESTION_PEDIDOS"),
+              sql`${productionOrders.id} != ${current.id}`,
+              eq(productionOrders.ancho, Number(body.ancho).toFixed(2)),
+              eq(productionOrders.micras, Number(body.micras).toFixed(2)),
+              sql`lower(trim(${productionOrders.material})) = ${normalizeMaterialComparison(body.material)}`,
+              sql`trim(${productionOrders.camisa}) = ${normalizeCamisa(String(body.camisa))}`,
+            ),
+          );
+
+        if (duplicateActive) {
+          return {
+            kind: "DUPLICATE_ACTIVE_GROUP" as const,
+            duplicateId: duplicateActive.id,
+          };
+        }
       }
 
       const [updatedOrder] = await tx
@@ -469,11 +504,10 @@ router.patch("/orders/:id", requireAdmin, async (req, res, next) => {
       res.status(404).json({ error: "La orden no existe" });
       return;
     }
-    if (result.kind === "AUTOMATIC") {
+    if (result.kind === "DUPLICATE_ACTIVE_GROUP") {
       res.status(409).json({
-        error:
-          "Las órdenes creadas por Gestión Pedidos no se pueden editar manualmente",
-        code: "AUTOMATIC_ORDER_NOT_EDITABLE",
+        error: `Ya existe una orden activa de Gestión Pedidos (ORD-${String(result.duplicateId).padStart(4, "0")}) con esas características`,
+        code: "DUPLICATE_ACTIVE_GROUP",
       });
       return;
     }

@@ -324,7 +324,7 @@ function handleGetOrders(statusFilter?: string) {
 
 function handleUpdateOrder(
   id: number,
-  _body: {
+  body: {
     ancho: number;
     micras: number;
     camisa: string;
@@ -334,22 +334,49 @@ function handleUpdateOrder(
 ) {
   const order = testDb.orders.find((o) => o.id === id);
   if (!order) return { status: 404, body: { error: "La orden no existe" } };
-  if (order.origen === "GESTION_PEDIDOS") {
-    return {
-      status: 409,
-      body: {
-        error:
-          "Las órdenes creadas por Gestión Pedidos no se pueden editar manualmente",
-        code: "AUTOMATIC_ORDER_NOT_EDITABLE",
-      },
-    };
-  }
   if (order.estado !== "ACTIVA") {
     return {
       status: 400,
       body: { error: "Solo se pueden editar órdenes activas" },
     };
   }
+
+  const characteristicsChanged =
+    Number(order.ancho).toFixed(2) !== Number(body.ancho).toFixed(2) ||
+    Number(order.micras).toFixed(2) !== Number(body.micras).toFixed(2) ||
+    normalizeCamisa(order.camisa) !== normalizeCamisa(body.camisa) ||
+    normalizeMaterialComparison(order.material) !==
+      normalizeMaterialComparison(body.material);
+
+  if (order.origen === "GESTION_PEDIDOS" && characteristicsChanged) {
+    const duplicateActive = testDb.orders.find(
+      (o) =>
+        o.id !== order.id &&
+        o.estado === "ACTIVA" &&
+        o.origen === "GESTION_PEDIDOS" &&
+        Number(o.ancho).toFixed(2) === Number(body.ancho).toFixed(2) &&
+        Number(o.micras).toFixed(2) === Number(body.micras).toFixed(2) &&
+        normalizeMaterialComparison(o.material) ===
+          normalizeMaterialComparison(body.material) &&
+        normalizeCamisa(o.camisa) === normalizeCamisa(body.camisa),
+    );
+
+    if (duplicateActive) {
+      return {
+        status: 409,
+        body: {
+          error: `Ya existe una orden activa de Gestión Pedidos (ORD-${String(duplicateActive.id).padStart(4, "0")}) con esas características`,
+          code: "DUPLICATE_ACTIVE_GROUP",
+        },
+      };
+    }
+  }
+
+  order.ancho = Number(body.ancho).toFixed(2);
+  order.micras = Number(body.micras).toFixed(2);
+  order.camisa = String(body.camisa);
+  order.material = body.material;
+  order.metrosNecesarios = Number(body.metrosNecesarios).toFixed(2);
   return { status: 200, body: { success: true } };
 }
 
@@ -1039,8 +1066,8 @@ describe("Fase 2: Integración Nexus en control-almacen", () => {
     assert.equal(responseBody.code, "INTEGRATION_NOT_CONFIGURED");
   });
 
-  // --- Test P: Protección de edición manual ---
-  it("P. Intentar editar manualmente orden GESTION_PEDIDOS: 409 AUTOMATIC_ORDER_NOT_EDITABLE", async () => {
+  // --- Test P: Edición manual de órdenes automáticas ---
+  it("P. Editar orden GESTION_PEDIDOS: permitido para administrador", async () => {
     const res = await handleNexusOrder({
       eventId: "11111111-1111-4111-8111-111111111111",
       pedidoId: "PED-001",
@@ -1052,6 +1079,7 @@ describe("Fase 2: Integración Nexus en control-almacen", () => {
       micras: 30,
     });
 
+    assert.equal(res.status, 201);
     if (res.status === 201) {
       const updateRes = handleUpdateOrder(res.body.orderId, {
         ancho: 1250,
@@ -1061,12 +1089,55 @@ describe("Fase 2: Integración Nexus en control-almacen", () => {
         metrosNecesarios: 10000,
       });
 
-      assert.equal(updateRes.status, 409);
-      assert.equal(updateRes.body.code, "AUTOMATIC_ORDER_NOT_EDITABLE");
+      assert.equal(updateRes.status, 200);
 
       const order = testDb.orders.find((o) => o.id === res.body.orderId)!;
-      assert.equal(Number(order.ancho), 1200);
-      assert.equal(Number(order.micras), 30);
+      assert.equal(Number(order.ancho), 1250);
+      assert.equal(Number(order.micras), 35);
+      assert.equal(order.camisa, "475");
+      assert.equal(Number(order.metrosNecesarios), 10000);
+    }
+  });
+
+  it("P2. Editar orden GESTION_PEDIDOS hacia un grupo ya activo: 409 DUPLICATE_ACTIVE_GROUP", async () => {
+    const first = await handleNexusOrder({
+      eventId: "11111111-1111-4111-8111-11111111aaaa",
+      pedidoId: "PED-001",
+      numeroPedidoCliente: "2600101",
+      metros: 5000,
+      bobinaMadre: 1200,
+      camisa: "400",
+      tipoMaterial: "OPP",
+      micras: 30,
+    });
+    const second = await handleNexusOrder({
+      eventId: "11111111-1111-4111-8111-11111111bbbb",
+      pedidoId: "PED-002",
+      numeroPedidoCliente: "2600102",
+      metros: 4000,
+      bobinaMadre: 1250,
+      camisa: "475",
+      tipoMaterial: "OPP",
+      micras: 35,
+    });
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    if (first.status === 201 && second.status === 201) {
+      const updateRes = handleUpdateOrder(second.body.orderId, {
+        ancho: 1200,
+        micras: 30,
+        camisa: "400",
+        material: "OPP",
+        metrosNecesarios: 4000,
+      });
+
+      assert.equal(updateRes.status, 409);
+      assert.equal(updateRes.body.code, "DUPLICATE_ACTIVE_GROUP");
+
+      const order = testDb.orders.find((o) => o.id === second.body.orderId)!;
+      assert.equal(Number(order.ancho), 1250);
+      assert.equal(Number(order.micras), 35);
     }
   });
 

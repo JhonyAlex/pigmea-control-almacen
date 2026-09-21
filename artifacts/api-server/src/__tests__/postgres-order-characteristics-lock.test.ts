@@ -540,10 +540,10 @@ describe("Bloqueo de características de órdenes con cobertura contra PostgreSQ
   // REGRESIÓN: VALIDACIONES MOVIDAS DENTRO DE LA TRANSACCIÓN
   // =========================================================================
 
-  it("L11. Regresión: orden GESTION_PEDIDOS sigue devolviendo 409 AUTOMATIC_ORDER_NOT_EDITABLE", async () => {
+  it("L11. Orden GESTION_PEDIDOS sin material registrado: el administrador puede editarla", async () => {
     const orderId = await insertOrder({ origen: "GESTION_PEDIDOS" });
 
-    const { status, body } = await patchOrder(orderId, {
+    const { status } = await patchOrder(orderId, {
       ancho: 1200,
       micras: 30,
       camisa: 400,
@@ -551,10 +551,33 @@ describe("Bloqueo de características de órdenes con cobertura contra PostgreSQ
       metrosNecesarios: 5000,
     });
 
-    assert.equal(status, 409);
-    assert.equal(body.code, "AUTOMATIC_ORDER_NOT_EDITABLE");
+    assert.equal(status, 200);
     const row = await orderRow(orderId);
-    assert.equal(row.material, "OPP");
+    assert.equal(row.material, "OPP RECICLADO");
+  });
+
+  it("L11b. Orden GESTION_PEDIDOS: editar hacia un grupo ya activo devuelve 409 DUPLICATE_ACTIVE_GROUP", async () => {
+    await insertOrder({
+      origen: "GESTION_PEDIDOS",
+      ancho: "1250.00",
+      micras: "35.00",
+      camisa: "475",
+    });
+    const orderId = await insertOrder({ origen: "GESTION_PEDIDOS" });
+
+    const { status, body } = await patchOrder(orderId, {
+      ancho: 1250,
+      micras: 35,
+      camisa: 475,
+      material: "OPP",
+      metrosNecesarios: 5000,
+    });
+
+    assert.equal(status, 409);
+    assert.equal(body.code, "DUPLICATE_ACTIVE_GROUP");
+    const row = await orderRow(orderId);
+    assert.equal(Number(row.ancho), 1200);
+    assert.equal(row.camisa, "400");
   });
 
   it("L12. Regresión: orden BLOQUEADA devuelve 400 y orden inexistente devuelve 404", async () => {
