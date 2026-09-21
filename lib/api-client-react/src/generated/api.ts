@@ -1404,6 +1404,79 @@ export const useSetOrderBlocked = <TError = ErrorType<void>,
       return useMutation(getSetOrderBlockedMutationOptions(options));
     }
 
+export const getDeleteOrderPedidoUrl = (id: number,
+    pedidoRelId: number,) => {
+
+
+
+
+  return `/api/orders/${id}/pedidos/${pedidoRelId}`
+}
+
+/**
+ * @summary Remove a pedido grouped into an active, unblocked production order
+ */
+export const deleteOrderPedido = async (id: number,
+    pedidoRelId: number, options?: Parameters<typeof customFetch>[1]): Promise<ProductionOrder> => {
+
+  return customFetch<ProductionOrder>(getDeleteOrderPedidoUrl(id,pedidoRelId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteOrderPedidoMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteOrderPedido>>, TError,{id: number;pedidoRelId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteOrderPedido>>, TError,{id: number;pedidoRelId: number}, TContext> => {
+
+const mutationKey = ['deleteOrderPedido'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteOrderPedido>>, {id: number;pedidoRelId: number}> = (props) => {
+          const {id,pedidoRelId} = props ?? {};
+
+          return  deleteOrderPedido(id,pedidoRelId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteOrderPedidoMutationResult = NonNullable<Awaited<ReturnType<typeof deleteOrderPedido>>>
+
+    export type DeleteOrderPedidoMutationError = ErrorType<void>
+
+    /**
+ * @summary Remove a pedido grouped into an active, unblocked production order
+ */
+export const useDeleteOrderPedido = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteOrderPedido>>, TError,{id: number;pedidoRelId: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteOrderPedido>>,
+        TError,
+        {id: number;pedidoRelId: number},
+        TContext
+      > => {
+      return useMutation(getDeleteOrderPedidoMutationOptions(options));
+    }
+
 export const getFinalizeOrderUrl = (id: number,) => {
 
 
@@ -1634,7 +1707,7 @@ export const getReorderOrdersUrl = () => {
 }
 
 /**
- * @summary Set the priority order of all active production orders
+ * @summary Set the priority order of one list of production orders
  */
 export const reorderOrders = async (orderReorderInput: OrderReorderInput, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
 
@@ -1683,7 +1756,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type ReorderOrdersMutationError = ErrorType<void>
 
     /**
- * @summary Set the priority order of all active production orders
+ * @summary Set the priority order of one list of production orders
  */
 export const useReorderOrders = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reorderOrders>>, TError,{data: BodyType<OrderReorderInput>}, TContext>, request?: SecondParameter<typeof customFetch>}

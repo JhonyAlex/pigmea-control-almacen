@@ -139,7 +139,16 @@ export interface OrderReopenInput {
   motivo?: string;
 }
 
+export type OrderReorderStatus = typeof OrderReorderStatus[keyof typeof OrderReorderStatus];
+
+
+export const OrderReorderStatus = {
+  ACTIVA: 'ACTIVA',
+  BLOQUEADA: 'BLOQUEADA',
+} as const;
+
 export interface OrderReorderInput {
+  estado?: OrderReorderStatus;
   /** @minItems 1 */
   orderIds: number[];
 }

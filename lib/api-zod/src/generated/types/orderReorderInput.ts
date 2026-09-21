@@ -5,8 +5,10 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { OrderReorderStatus } from './orderReorderStatus';
 
 export interface OrderReorderInput {
+  estado?: OrderReorderStatus;
   /** @minItems 1 */
   orderIds: number[];
 }

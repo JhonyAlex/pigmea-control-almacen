@@ -14,6 +14,7 @@ import {
   UpdateOrderBody,
   UpdateOrderParams,
   DeleteOrderParams,
+  DeleteOrderPedidoParams,
   FinalizeOrderBody,
   FinalizeOrderParams,
   ListInventoryQueryParams,
@@ -64,6 +65,12 @@ const CAMISAS = new Set([
 const MATERIALES = new Set(["OPP", "OPP RECICLADO"]);
 
 const numeric = (value: string | number | null) => Number(value ?? 0);
+
+// Manual priority is the only thing that moves an order inside its list. The
+// single exception is a brand new order, which always lands at the bottom of
+// the active list. Taking the maximum over every row (not only the active
+// ones) keeps `orden` unique, so the list order never depends on a tie-break.
+const NEXT_ORDEN_AT_BOTTOM = sql<number>`coalesce((select max(${productionOrders.orden}) from ${productionOrders}), -1) + 1`;
 
 // Numeric comparison under the same normalization the system stores with
 // ("1200" and "1200.00" are the same width), so re-sending identical values
@@ -224,7 +231,7 @@ async function ordersWithTotals(status?: string) {
   const orders = await db
     .select()
     .from(productionOrders)
-    .orderBy(asc(productionOrders.orden), desc(productionOrders.id));
+    .orderBy(asc(productionOrders.orden), asc(productionOrders.id));
 
   // Covered meters per order: coils manufactured for the order that are not
   // committed elsewhere, plus pre-existing stock coils assigned to it.
@@ -320,7 +327,7 @@ router.post("/orders", requireAdmin, async (req, res, next) => {
           metrosNecesarios: String(body.metrosNecesarios),
           estado: "ACTIVA",
           origen: "MANUAL",
-          orden: sql`coalesce((select min(${productionOrders.orden}) from ${productionOrders} where ${productionOrders.estado} = 'ACTIVA'), 0) - 1`,
+          orden: NEXT_ORDEN_AT_BOTTOM,
         })
         .returning();
       const covered = await computeOrderCoveredMeters(tx, created.id);
@@ -334,22 +341,36 @@ router.post("/orders", requireAdmin, async (req, res, next) => {
 
 router.patch("/orders/reorder", requireAdmin, async (req, res, next) => {
   try {
-    const { orderIds } = ReorderOrdersBody.parse(req.body);
+    const { estado, orderIds } = ReorderOrdersBody.parse(req.body);
     const result = await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(481929)`);
-      const activeOrders = await tx
-        .select({ id: productionOrders.id })
+      // Active and blocked orders share one priority sequence. Finalized ones
+      // are history and are left out of it.
+      const sequence = await tx
+        .select({ id: productionOrders.id, estado: productionOrders.estado })
         .from(productionOrders)
-        .where(eq(productionOrders.estado, "ACTIVA"));
-      const activeIds = new Set(activeOrders.map((order) => order.id));
+        .where(inArray(productionOrders.estado, ["ACTIVA", "BLOQUEADA"]))
+        .orderBy(asc(productionOrders.orden), asc(productionOrders.id));
+
+      const groupIds = sequence
+        .filter((order) => order.estado === estado)
+        .map((order) => order.id);
+      const groupIdSet = new Set(groupIds);
       const isExactOrder =
-        orderIds.length === activeIds.size &&
+        orderIds.length === groupIds.length &&
         new Set(orderIds).size === orderIds.length &&
-        orderIds.every((id) => activeIds.has(id));
+        orderIds.every((id) => groupIdSet.has(id));
       if (!isExactOrder) return false;
 
+      // Only the slots this list already occupies are rewritten, so
+      // reordering the active list never reshuffles the blocked one and the
+      // whole sequence stays dense and free of ties.
+      let cursor = 0;
+      const resequenced = sequence.map((order) =>
+        order.estado === estado ? orderIds[cursor++] : order.id,
+      );
       await Promise.all(
-        orderIds.map((id, index) =>
+        resequenced.map((id, index) =>
           tx
             .update(productionOrders)
             .set({ orden: index })
@@ -656,6 +677,104 @@ router.patch("/orders/:id/blocked", requireAdmin, async (req, res, next) => {
     next(error);
   }
 });
+
+router.delete(
+  "/orders/:id/pedidos/:pedidoRelId",
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const { id, pedidoRelId } = DeleteOrderPedidoParams.parse({
+        id: Number(req.params.id),
+        pedidoRelId: Number(req.params.pedidoRelId),
+      });
+
+      const result = await db.transaction(async (tx) => {
+        const [order] = await tx
+          .select()
+          .from(productionOrders)
+          .where(eq(productionOrders.id, id))
+          .for("update");
+        if (!order) return { kind: "MISSING" as const };
+        if (order.estado !== "ACTIVA") return { kind: "NOT_ACTIVE" as const };
+
+        const linked = await tx
+          .select()
+          .from(productionOrderPedidos)
+          .where(eq(productionOrderPedidos.ordenId, id));
+        const target = linked.find((p) => p.id === pedidoRelId);
+        if (!target) return { kind: "MISSING" as const };
+        // A grouped order's metrosNecesarios is the sum of its pedidos: it
+        // must always keep at least one, or the total loses its meaning.
+        if (linked.length <= 1) return { kind: "LAST_PEDIDO" as const };
+
+        await tx
+          .delete(productionOrderPedidos)
+          .where(eq(productionOrderPedidos.id, pedidoRelId));
+
+        const [{ total }] = await tx
+          .select({
+            total: sql<string>`coalesce(sum(${productionOrderPedidos.metros}), 0)`,
+          })
+          .from(productionOrderPedidos)
+          .where(eq(productionOrderPedidos.ordenId, id));
+
+        const [updated] = await tx
+          .update(productionOrders)
+          .set({ metrosNecesarios: total })
+          .where(eq(productionOrders.id, id))
+          .returning();
+
+        await logOrderEvent(tx, {
+          ordenId: id,
+          usuarioId: req.authUser?.id ?? null,
+          accion: "PEDIDO_ELIMINADO",
+          detalle: `Pedido ${target.numeroPedidoCliente || target.pedidoId} eliminado de la orden (-${numeric(target.metros)} m)`,
+        });
+
+        const covered = await computeOrderCoveredMeters(tx, id);
+        const remaining = await tx
+          .select()
+          .from(productionOrderPedidos)
+          .where(eq(productionOrderPedidos.ordenId, id))
+          .orderBy(asc(productionOrderPedidos.vinculadoEn));
+
+        return {
+          kind: "DELETED" as const,
+          order: updated,
+          covered,
+          pedidos: remaining.map((r) => ({
+            id: r.id,
+            pedidoId: r.pedidoId,
+            numeroPedidoCliente: r.numeroPedidoCliente,
+            metros: numeric(r.metros),
+            vinculadoEn: r.vinculadoEn.toISOString(),
+          })),
+        };
+      });
+
+      if (result.kind === "MISSING") {
+        res.status(404).json({ error: "La orden o el pedido no existen" });
+        return;
+      }
+      if (result.kind === "NOT_ACTIVE") {
+        res.status(400).json({
+          error:
+            "Solo se pueden eliminar pedidos de órdenes activas y no bloqueadas",
+        });
+        return;
+      }
+      if (result.kind === "LAST_PEDIDO") {
+        res.status(400).json({
+          error: "No se puede eliminar el único pedido vinculado a la orden",
+        });
+        return;
+      }
+      res.json(orderView(result.order, result.covered, result.pedidos));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.post("/orders/:id/finalize", requireAdmin, async (req, res, next) => {
   try {

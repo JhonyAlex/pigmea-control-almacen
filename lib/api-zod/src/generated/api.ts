@@ -381,6 +381,38 @@ export const SetOrderBlockedResponse = zod.object({
 
 
 /**
+ * @summary Remove a pedido grouped into an active, unblocked production order
+ */
+export const DeleteOrderPedidoParams = zod.object({
+  "id": zod.coerce.number(),
+  "pedidoRelId": zod.coerce.number()
+})
+
+export const DeleteOrderPedidoResponse = zod.object({
+  "id": zod.number(),
+  "ancho": zod.number(),
+  "micras": zod.number(),
+  "camisa": zod.string(),
+  "material": zod.string(),
+  "metrosNecesarios": zod.number(),
+  "metrosFabricados": zod.number(),
+  "metrosPendientes": zod.number(),
+  "estado": zod.enum(['ACTIVA', 'BLOQUEADA', 'FINALIZADA']),
+  "origen": zod.enum(['MANUAL', 'GESTION_PEDIDOS']),
+  "pedidosRelacionados": zod.array(zod.object({
+  "id": zod.number(),
+  "pedidoId": zod.string(),
+  "numeroPedidoCliente": zod.string(),
+  "metros": zod.number(),
+  "vinculadoEn": zod.coerce.date()
+})),
+  "creadoEn": zod.coerce.date(),
+  "finalizadaEn": zod.coerce.date().nullable(),
+  "nota": zod.string().nullable()
+})
+
+
+/**
  * @summary Manually finalize a blocked production order
  */
 export const FinalizeOrderParams = zod.object({
@@ -472,12 +504,13 @@ export const ListOrderEventsResponse = zod.array(ListOrderEventsResponseItem)
 
 
 /**
- * @summary Set the priority order of all active production orders
+ * @summary Set the priority order of one list of production orders
  */
-
+export const reorderOrdersBodyEstadoDefault = `ACTIVA`;
 
 
 export const ReorderOrdersBody = zod.object({
+  "estado": zod.enum(['ACTIVA', 'BLOQUEADA']).default(reorderOrdersBodyEstadoDefault),
   "orderIds": zod.array(zod.number()).min(1)
 })
 

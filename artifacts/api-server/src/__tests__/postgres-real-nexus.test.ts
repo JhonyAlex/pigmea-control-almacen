@@ -202,7 +202,7 @@ describe("Validación Integral contra PostgreSQL y Express Reales", () => {
     assert.equal(relRes.rows.length, 2);
   });
 
-  it("6C2. Crear o agrupar prioriza la orden activa sin mover ni tomar como referencia las bloqueadas", async () => {
+  it("6C2. Una orden nueva entra al final de las activas y agrupar no mueve a nadie", async () => {
     const blocked = await pool.query(`
       INSERT INTO production_orders
         (ancho, micras, camisa, material, metros_necesarios, estado, origen, orden)
@@ -239,12 +239,17 @@ describe("Validación Integral contra PostgreSQL y Express Reales", () => {
     assert.equal(orderA.response.status, 201);
     assert.equal(orderB.response.status, 201);
 
+    // Cada orden nueva se coloca por debajo de todo lo ya encolado: A antes
+    // que B porque entró antes, y ambas por debajo de la bloqueada (-100).
     const beforeGrouping = await pool.query(
       `SELECT id, orden FROM production_orders ORDER BY id`,
     );
-    assert.equal(beforeGrouping.rows.find((row) => row.id === orderA.body.orderId).orden, -1);
-    assert.equal(beforeGrouping.rows.find((row) => row.id === orderB.body.orderId).orden, -2);
-    assert.equal(beforeGrouping.rows.find((row) => row.id === blocked.rows[0].id).orden, -100);
+    const ordenOf = (rows: any[], id: number) =>
+      rows.find((row) => row.id === id).orden;
+    const ordenA = ordenOf(beforeGrouping.rows, orderA.body.orderId);
+    const ordenB = ordenOf(beforeGrouping.rows, orderB.body.orderId);
+    assert.ok(ordenA < ordenB, "la orden creada después queda por debajo");
+    assert.equal(ordenOf(beforeGrouping.rows, blocked.rows[0].id), -100);
 
     const grouped = await sendNexus({
       ...payloadA,
@@ -255,18 +260,21 @@ describe("Validación Integral contra PostgreSQL y Express Reales", () => {
     assert.equal(grouped.response.status, 200);
     assert.equal(grouped.body.action, "ORDER_UPDATED");
 
+    // Agrupar sólo suma metros: ni la orden agrupada ni el resto se mueven.
+    const afterGrouping = await pool.query(
+      `SELECT id, orden FROM production_orders ORDER BY id`,
+    );
+    assert.equal(ordenOf(afterGrouping.rows, orderA.body.orderId), ordenA);
+    assert.equal(ordenOf(afterGrouping.rows, orderB.body.orderId), ordenB);
+    assert.equal(ordenOf(afterGrouping.rows, blocked.rows[0].id), -100);
+
     const activeOrders = await pool.query(
-      `SELECT id FROM production_orders WHERE estado = 'ACTIVA' ORDER BY orden ASC, id DESC`,
+      `SELECT id FROM production_orders WHERE estado = 'ACTIVA' ORDER BY orden ASC, id ASC`,
     );
     assert.deepEqual(
       activeOrders.rows.map((order) => order.id),
       [orderA.body.orderId, orderB.body.orderId],
     );
-    const blockedAfter = await pool.query(
-      `SELECT orden FROM production_orders WHERE id = $1`,
-      [blocked.rows[0].id],
-    );
-    assert.equal(blockedAfter.rows[0].orden, -100);
   });
 
   it("6D. UNIQUE(event_id) en PostgreSQL: Impide físicamente duplicar event_id", async () => {

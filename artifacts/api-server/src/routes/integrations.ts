@@ -170,15 +170,12 @@ router.post(
             .from(productionOrderPedidos)
             .where(eq(productionOrderPedidos.ordenId, compatibleOrder.id));
 
-          // A newly grouped active order becomes the next production priority.
-          // Blocked/finalized rows must neither move nor influence that priority.
-          await tx.execute(sql`select pg_advisory_xact_lock(481929)`);
+          // Grouping only adds meters. The position in the list is manual
+          // priority and nothing but an admin may change it, so the order
+          // stays exactly where production left it.
           await tx
             .update(productionOrders)
-            .set({
-              metrosNecesarios: total,
-              orden: sql`coalesce((select min(${productionOrders.orden}) from ${productionOrders} where ${productionOrders.estado} = 'ACTIVA'), 0) - 1`,
-            })
+            .set({ metrosNecesarios: total })
             .where(eq(productionOrders.id, compatibleOrder.id));
 
           return {
@@ -205,7 +202,10 @@ router.post(
             metrosNecesarios: String(payload.metros),
             estado: "ACTIVA",
             origen: "GESTION_PEDIDOS",
-            orden: sql`coalesce((select min(${productionOrders.orden}) from ${productionOrders} where ${productionOrders.estado} = 'ACTIVA'), 0) - 1`,
+            // Same rule as a manually created order: it goes last, below
+            // everything already queued. Taking the maximum over every row
+            // keeps `orden` unique across the list.
+            orden: sql`coalesce((select max(${productionOrders.orden}) from ${productionOrders}), -1) + 1`,
           })
           .returning();
 

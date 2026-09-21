@@ -31,6 +31,7 @@ export * from './orderInput';
 export * from './orderOrigin';
 export * from './orderReopenInput';
 export * from './orderReorderInput';
+export * from './orderReorderStatus';
 export * from './orderStatus';
 export * from './passwordInput';
 export * from './productionOrder';
