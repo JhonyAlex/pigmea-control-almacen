@@ -18,6 +18,7 @@ import {
 import { Field, inputClass, Modal } from '@/components/modal';
 import { CoilCamisaEditor, CoilMaterialEditor, CoilMetersEditor } from '@/components/coil-material-editor';
 import { MaterialChip } from '@/components/material-chip';
+import { OrderPicker } from '@/components/order-picker';
 import {
   CAMISAS,
   characteristicsLabel,
@@ -68,6 +69,7 @@ function Home({ canManage }: { canManage: boolean }) {
   const [pendingConsume, setPendingConsume] = useState<Coil | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sort, setSort] = useState<InventorySortState | null>(readInventorySortPreference);
+  const [manufacturedOrderId, setManufacturedOrderId] = useState<number | null>(null);
 
   const [remnantAncho, setRemnantAncho] = useState<string>('');
   const [remnantMicras, setRemnantMicras] = useState<string>('');
@@ -428,8 +430,8 @@ function Home({ canManage }: { canManage: boolean }) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const metros = Number(form.get('metros'));
-    if (metros < 100 || metros > 25000) return;
-    addManufactured.mutate({ data: { ordenId: Number(form.get('ordenId')), metros } }, {
+    if (metros < 100 || metros > 25000 || manufacturedOrderId === null) return;
+    addManufactured.mutate({ data: { ordenId: manufacturedOrderId, metros } }, {
       onSuccess: () => { invalidateInventory(); setModal(null); setNotice('Bobina fabricada incorporada al almacén.'); },
     });
   };
@@ -478,7 +480,7 @@ function Home({ canManage }: { canManage: boolean }) {
           </div>
           <div className="flex gap-2.5">
             <button type="button" onClick={openRemnantModal} className="pressable flex min-h-12 items-center justify-center gap-2 rounded-lg border border-primary/25 bg-card px-4 text-sm font-semibold text-primary hover:bg-muted sm:px-5" data-testid="button-add-remnant"><CirclePlus size={18} /> Añadir resto</button>
-            <button type="button" onClick={() => { setNotice(null); setModal('manufactured'); }} className="pressable flex min-h-12 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:brightness-110 sm:px-5" data-testid="button-add-manufactured"><Factory size={18} /> Bobina fabricada</button>
+            <button type="button" onClick={() => { setNotice(null); setManufacturedOrderId(null); setModal('manufactured'); }} className="pressable flex min-h-12 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:brightness-110 sm:px-5" data-testid="button-add-manufactured"><Factory size={18} /> Bobina fabricada</button>
           </div>
         </div>
 
@@ -699,12 +701,9 @@ function Home({ canManage }: { canManage: boolean }) {
         )}
       </div>
 
-      <Modal open={modal === 'manufactured'} onClose={() => setModal(null)} onSubmit={handleManufactured} eyebrow="Entrada de almacén" title="Bobina fabricada" submitLabel={addManufactured.isPending ? 'Registrando…' : 'Registrar bobina'} submitDisabled={addManufactured.isPending || activeOrders.length === 0}>
+      <Modal open={modal === 'manufactured'} onClose={() => setModal(null)} onSubmit={handleManufactured} eyebrow="Entrada de almacén" title="Bobina fabricada" submitLabel={addManufactured.isPending ? 'Registrando…' : 'Registrar bobina'} submitDisabled={addManufactured.isPending || activeOrders.length === 0 || manufacturedOrderId === null}>
         {addManufactured.isError && <p className="mb-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert" data-testid="error-add-manufactured">No se pudo registrar la bobina. Revisa los datos.</p>}
-        {activeOrders.length === 0 ? <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center"><AlertTriangle className="mx-auto text-accent" size={25} /><p className="mt-2 text-sm font-medium">No hay órdenes bloqueadas</p><p className="mt-1 text-xs text-muted-foreground">No hay órdenes bloqueadas disponibles para registrar fabricación.</p></div> : <div className="space-y-5"><Field label="Orden de producción"><select name="ordenId" required className={inputClass} defaultValue="" data-testid="select-manufactured-order"><option value="" disabled>Selecciona una orden</option>{activeOrders.map((order) => {
-          const pedidosText = order.pedidosRelacionados && order.pedidosRelacionados.length > 0 ? ` [${formatPedidosSummary(order.pedidosRelacionados)}]` : '';
-          return <option key={order.id} value={order.id}>#{order.id}{pedidosText} · {order.ancho} mm · {order.micras} µ · pendientes {formatMeters(order.metrosPendientes)} m</option>;
-        })}</select></Field><Field label="Metros fabricados" hint="mín. 100, máx. 25.000"><input name="metros" type="number" min="100" max="25000" step="1" required className={inputClass} placeholder="Ej. 1.250" data-testid="input-manufactured-meters" /></Field></div>}
+        {activeOrders.length === 0 ? <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center"><AlertTriangle className="mx-auto text-accent" size={25} /><p className="mt-2 text-sm font-medium">No hay órdenes bloqueadas</p><p className="mt-1 text-xs text-muted-foreground">No hay órdenes bloqueadas disponibles para registrar fabricación.</p></div> : <div className="space-y-5"><OrderPicker orders={activeOrders} value={manufacturedOrderId} onChange={setManufacturedOrderId} /><Field label="Metros fabricados" hint="mín. 100, máx. 25.000"><input name="metros" type="number" min="100" max="25000" step="1" required className={inputClass} placeholder="Ej. 1.250" data-testid="input-manufactured-meters" /></Field></div>}
       </Modal>
 
       <Modal
